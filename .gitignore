@@ -1,0 +1,15 @@
+# Virtual environment
+env_post/
+.venv/
+venv/
+
+# Secrets — never commit API keys
+.env
+
+# Generated output
+Posts/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
