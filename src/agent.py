@@ -565,7 +565,8 @@ def generate_linkedin_post_stream(topic: str) -> Generator[ProgressEvent, None, 
                 yield _ev("force_write", _WRITE_PCT - 5,
                           f"Search cap ({MAX_SEARCHES}) reached — writing with gathered data...")
 
-            sys.stdout = io.StringIO()  # re-redirect before next node runs
+            sys.stdout = io.StringIO()  
+            # re-redirect before next node runs
 
     except RuntimeError as exc:
         sys.stdout = _real_stdout
