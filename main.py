@@ -27,6 +27,8 @@ def main():
 
     start = time.time()
     post  = None
+    image_path = None
+    image_base64 = None
 
     try:
         for event in generate_linkedin_post_stream(topic):
@@ -44,6 +46,8 @@ def main():
 
             elif etype == "result":
                 post = event["post"]
+                image_path = event.get("image_path")
+                image_base64 = event.get("image_base64")
 
             elif etype == "error":
                 print(f"\nFailed: {event['msg']}")
@@ -70,9 +74,13 @@ def main():
 
     try:
         pdf_path = save_post_as_pdf(post, topic)
-        print(f"\nPost saved to: {pdf_path}")
+        print(f"\nPDF saved to:   {pdf_path}")
+        if image_path:
+            print(f"Image saved to: {image_path}")
+        if image_base64:
+            print(f"Image Base64:   {len(image_base64)} bytes generated.")
     except Exception as e:
-        print(f"\nWarning: Could not save PDF — {e}")
+        print(f"\nWarning: Could not save PDF/Image outputs — {e}")
 
 
 if __name__ == "__main__":

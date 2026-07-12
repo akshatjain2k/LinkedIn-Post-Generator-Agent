@@ -37,6 +37,7 @@ mcp = FastMCP(
     ),
 )
 
+import os
 
 @mcp.tool()
 def create_linkedin_post(topic: str) -> str:
@@ -57,15 +58,26 @@ def create_linkedin_post(topic: str) -> str:
         topic: Subject for the LinkedIn post, e.g. "LangGraph for building AI agents"
 
     Returns:
-        The generated post text followed by the path of the saved PDF.
+        The generated post text followed by the relative paths and base64 image data.
     """
-    post = generate_linkedin_post(topic)
+    post, image_path, base64_image = generate_linkedin_post(topic)
 
     try:
         pdf_path = save_post_as_pdf(post, topic)
-        return f"{post}\n\n[PDF saved → {pdf_path}]"
+        
+        rel_pdf_path = os.path.relpath(pdf_path)
+        result = f"{post}\n\n[PDF saved → {rel_pdf_path}]"
+        
+        if image_path:
+            rel_image_path = os.path.relpath(image_path)
+            result += f"\n[Image saved → {rel_image_path}]"
+            
+        if base64_image:
+            result += f"\n\n--- Image Base64 Data ---\n{base64_image}\n-------------------------"
+            
+        return result
     except Exception as exc:
-        return f"{post}\n\n[PDF save failed: {exc}]"
+        return f"{post}\n\n[Save failed: {exc}]"
 
 
 if __name__ == "__main__":

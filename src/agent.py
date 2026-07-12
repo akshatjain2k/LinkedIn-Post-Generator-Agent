@@ -42,6 +42,7 @@ from langgraph.prebuilt import ToolNode
 
 from .tools import search_google
 from .prompts import SYSTEM_PROMPT, EVALUATOR_PROMPT
+from .pdf_utils import topic_to_filename
 
 
  # Configuration — all values come from .env (see .env for swap examples)
@@ -213,6 +214,7 @@ def _build_llm():
             temperature=temperature,
             top_p=top_p,
             max_tokens=max_tokens,
+            timeout=120,
         )
 
     # ── ChatOpenAI path (default) ─────────────────────────────────────────────
@@ -601,8 +603,7 @@ def generate_linkedin_post_stream(topic: str) -> Generator[ProgressEvent, None, 
 
         if approved:
             yield _ev("approved", 99, "Evaluator approved — post is ready.")
-            yield {"type": "result", "post": post, "pct": 100}
-            return
+            break
 
         # Evaluator found issues — rewrite the post
         feedback_lines = [ln.strip() for ln in feedback.splitlines() if ln.strip()]
@@ -612,19 +613,30 @@ def generate_linkedin_post_stream(topic: str) -> Generator[ProgressEvent, None, 
                   feedback="\n".join(feedback_lines[:8]))  # cap feedback to 8 lines
 
         post = _run_revision(post, feedback, topic, _llm)
+    else:
+        # All revision attempts used — return whatever we have
+        yield _ev("max_revisions", _REVISE_END_PCT,
+                  f"Max revisions ({MAX_REVISIONS}) reached — returning last version.")
 
-    # All revision attempts used — return whatever we have
-    yield _ev("max_revisions", _REVISE_END_PCT,
-              f"Max revisions ({MAX_REVISIONS}) reached — returning last version.")
-    yield {"type": "result", "post": post, "pct": 100}
+    # ── Phase 3: Image generation ───────────────────────────────────────────
+    yield _ev("generating_image", 99, "Generating image from post content...")
+    try:
+        from src import text2image
+        safe_topic = topic_to_filename(topic)
+        output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Posts", safe_topic)
+        image_path, b64_data = text2image.generate_image(post, safe_topic, output_dir=output_dir)
+        yield {"type": "result", "post": post, "image_path": image_path, "image_base64": b64_data, "pct": 100}
+    except Exception as e:
+        yield {"type": "error", "msg": f"Failed to generate image: {e}", "pct": 99}
+        yield {"type": "result", "post": post, "pct": 100}
 
 
-def generate_linkedin_post(topic: str) -> str:
+def generate_linkedin_post(topic: str) -> tuple[str, str, str]:
     """
     Blocking convenience wrapper around generate_linkedin_post_stream().
 
     Iterates the stream, prints each step to the terminal as [pct%] msg,
-    and returns the finished post string.
+    and returns the finished post string, image path, and image base64.
 
     Raises:
         RuntimeError — for any generation or evaluation failure.
@@ -635,7 +647,7 @@ def generate_linkedin_post(topic: str) -> str:
         if event["type"] == "progress":
             _progress(f"  [{event['pct']:3d}%]  {event['msg']}")
         elif event["type"] == "result":
-            return event["post"]
+            return event["post"], event.get("image_path", ""), event.get("image_base64", "")
         elif event["type"] == "error":
             raise RuntimeError(event["msg"])
     raise RuntimeError("Stream ended without a result.")

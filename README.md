@@ -1,6 +1,6 @@
 # LinkedIn Post Creator Agent
 
-An AI-powered agent that takes a topic, searches Google for real, current information, writes a developer-focused LinkedIn post, evaluates it against strict writing rules, and saves it as a PDF. Exposed as both a CLI tool and an MCP tool callable from Claude Code, Claude Desktop, or MCP Inspector.
+An AI-powered agent that takes a topic, searches Google for real, current information, writes a developer-focused LinkedIn post, evaluates it against strict writing rules, generates a highly simplified vector-art diagram representing the concept, and saves both the post (as a PDF) and the image (as a PNG). Exposed as both a CLI tool and an MCP tool callable from Claude Code, Claude Desktop, or MCP Inspector.
 
 ---
 
@@ -10,13 +10,11 @@ An AI-powered agent that takes a topic, searches Google for real, current inform
 - [Tech Stack](#tech-stack)
 - [Project Structure](#project-structure)
 - [End-to-End Flow](#end-to-end-flow)
-- [Agent Graph](#agent-graph)
 - [Setup](#setup)
 - [Usage](#usage)
   - [CLI](#cli)
   - [MCP Server](#mcp-server)
 - [Configuration](#configuration)
-- [Post Format](#post-format)
 
 ---
 
@@ -29,13 +27,12 @@ An AI-powered agent that takes a topic, searches Google for real, current inform
 | Structured narrative | Fixed story arc: problem → tool → hard result → question |
 | Developer voice | No marketing language, no exclamation marks, dry and factual |
 | Hard numbers | Requires a real metric from search (latency, time saved, cost) — no invented stats |
-| Search cap guard | Hard limit of `MAX_SEARCHES`; if hit, a `force_write` node redirects the LLM to write with what it has |
 | Evaluator agent | Separate LLM call checks the post against all writing rules; returns `[STATUS: GO AHEAD]` or `[STATUS: REVISION NEEDED]` with bullet feedback |
-| Revision loop | Up to `MAX_REVISIONS` rewrites driven by evaluator feedback; fails-open on evaluator error |
-| Streaming progress | `generate_linkedin_post_stream()` yields `{"type", "pct", "msg"}` events — ready for CLI, MCP, or a future UI progress bar |
-| PDF export | Auto-saves every post to `Posts/<topic>.pdf` using Calibri font (Unicode + emoji) |
+| Local Image Generation | Uses a local Flux model via `draw-things-cli` to generate a simplified, clear flowchart or conceptual diagram for the post. |
+| PDF export | Auto-saves every post to `Posts/<topic>/<topic>.pdf` using Calibri font (Unicode + emoji) |
+| Unified Outputs | Saves all assets (PDF and PNG) into dynamically named topic subdirectories. |
+| Base64 API Support | Seamlessly returns raw Base64 image data alongside the text to support direct frontend UI rendering. |
 | MCP tool | FastMCP over Streamable HTTP — callable from Claude Code, Claude Desktop, or MCP Inspector |
-| Error handling | Human-readable errors for overload, rate limits, quota exhaustion, degraded/EOL models, bad keys |
 
 ---
 
@@ -47,10 +44,10 @@ An AI-powered agent that takes a topic, searches Google for real, current inform
 | **LLM (OpenAI path)** | `ChatOpenAI` from `langchain_openai` — any OpenAI-compatible endpoint |
 | **Agent Framework** | `langgraph` — explicit `StateGraph` with typed state, named nodes, conditional routing |
 | **Web Search** | SerpAPI (`google-search-results`) wrapped as a LangChain `@tool` |
-| **PDF Generation** | `fpdf2` with system Calibri font for full Unicode + emoji support |
+| **PDF Generation** | `reportlab` — fast, native PDF generation using standard Helvetica font |
+| **Image Generation** | `draw-things-cli` executing the `flux_2_klein_4b_q6p.ckpt` model locally |
 | **MCP Server** | `mcp[cli]` — FastMCP over Streamable HTTP transport |
 | **Config** | `python-dotenv` — all credentials and behaviour values from `.env` |
-| **Language** | Python 3.12 |
 
 ---
 
@@ -66,12 +63,16 @@ Post Creator Agent/
 ├── .gitignore
 │
 ├── src/
-│   ├── agent.py             # LangGraph graph, evaluator, progress stream generator
+│   ├── text2image.py        # Local image generation script (Flux via draw-things-cli)
+│   ├── agent.py             # LangGraph graph, evaluator, image trigger, progress stream
 │   ├── tools.py             # search_google tool (SerpAPI)
 │   ├── prompts.py           # SYSTEM_PROMPT + EVALUATOR_PROMPT
-│   └── pdf_utils.py         # PDF generation
+│   └── pdf_utils.py         # PDF generation & folder routing
 │
-└── Posts/                   # Auto-created; one PDF per generated post
+└── Posts/                   # Auto-created structure for assets
+    └── <Topic_Name>/
+        ├── <Topic_Name>.pdf
+        └── <Topic_Name>.png
 ```
 
 ---
@@ -81,122 +82,30 @@ Post Creator Agent/
 ### 1 — Input
 
 The user provides a topic (e.g. `"Redis caching for API performance"`).
-
-- Via CLI: `python main.py "your topic"` or interactive prompt
+- Via CLI: `python main.py "your topic"`
 - Via MCP: Claude calls `create_linkedin_post(topic="your topic")`
-
----
 
 ### 2 — Progress Stream
 
-Both surfaces call `generate_linkedin_post_stream(topic)` — a generator that yields structured events:
+Both surfaces call `generate_linkedin_post_stream(topic)` — a generator that yields structured events indicating exactly what the pipeline is doing at any moment.
 
-```python
-{"type": "progress", "step": "searching", "pct": 27, "msg": 'Searching: "Redis latency 2024"'}
-{"type": "progress", "step": "evaluating", "pct": 73, "msg": "Evaluating post (attempt 1/1)..."}
-{"type": "result",   "post": "<full post text>", "pct": 100}
-{"type": "error",    "msg": "Model unavailable. Update LLM_MODEL in .env.", "pct": 0}
-```
+### 3 — LangGraph StateGraph & Evaluation Loop
 
-`main.py` iterates this stream and prints each step. `mcp_server.py` uses the blocking wrapper `generate_linkedin_post()`. A future UI can consume the same events over WebSocket or SSE without any code changes.
+The agent searches the web, drafts the post, and then enters a strict evaluation loop. The Evaluator LLM checks against the rules and forces revisions until approved or `MAX_REVISIONS` is reached.
 
----
+### 4 — Image Generation
 
-### 3 — LangGraph StateGraph (`src/agent.py`)
+Once the post text is finalized, the pipeline triggers `text2image.py`.
+- An LLM constructs a highly descriptive, minimalist prompt based on the post.
+- The prompt is sent to `draw-things-cli`, which executes the Flux model locally on your machine.
+- The resulting `.png` is saved.
 
-Three nodes, typed state:
+### 5 — Output & Export
 
-```python
-class AgentState(TypedDict):
-    messages:     Annotated[list, add_messages]  # appended, never overwritten
-    topic:        str
-    search_count: int                            # searches planned by LLM so far
-```
-
-| Node | What it does |
-|---|---|
-| `researcher` | Calls the LLM with full message history; counts new tool calls |
-| `tools` | Executes `search_google` via LangGraph's `ToolNode` |
-| `force_write` | Injected when `search_count >= MAX_SEARCHES` — tells the LLM to write immediately |
-
-**Routing after `researcher`:**
-```
-tool calls + under cap   →  tools
-tool calls + cap hit     →  force_write → researcher
-no tool calls (wrote)    →  END
-```
-
----
-
-### 4 — Evaluate → Revise Loop
-
-After the graph produces a post, the generator runs:
-
-```
-for attempt in range(MAX_REVISIONS):
-    approved, feedback = _evaluate_post(post, llm)
-    if approved:
-        yield result          # done
-        return
-    post = _run_revision(post, feedback, topic, llm)
-
-yield result   # max revisions reached — return last version
-```
-
-`_evaluate_post()` sends the post + all writing rules to the LLM with `EVALUATOR_PROMPT`. Returns `[STATUS: GO AHEAD]` or `[STATUS: REVISION NEEDED]` + bullet feedback. Fails-open on error (approves silently).
-
-`_run_revision()` rewrites the post using only the feedback — no re-searching. If the revised text is under 100 characters (garbled model output), it keeps the previous version.
-
----
-
-### 5 — Progress Percentages
-
-Recalibrate automatically when `MAX_SEARCHES` / `MAX_REVISIONS` change in `.env`:
-
-```
-  0 %        planning
-  0 – 55 %   search phase      (divided evenly by MAX_SEARCHES)
- 55 – 63 %   writing
- 63 – 80 %   first evaluation
- 80 – 95 %   revision phase    (divided evenly by MAX_REVISIONS)
-100 %        result
-```
-
----
-
-### 6 — PDF Export (`src/pdf_utils.py`)
-
-Saves to `Posts/<topic>.pdf` using Windows Calibri font (Unicode + emoji). Falls back to Helvetica on non-Windows.
-
----
-
-## Agent Graph
-
-```
-       START
-         │
-         ▼
-   ┌─────────────┐
-   │  researcher │◄──────────────────────────┐
-   └──────┬──────┘                            │
-          │  _route()                         │
-          ├── tool calls + under cap  ──► ┌──────┐
-          │                               │tools │
-          │◄──────────────────────────────┴──────┘
-          │
-          ├── tool calls + cap hit ──► ┌─────────────┐
-          │                           │ force_write  │
-          │◄──────────────────────────┴─────────────-┘
-          │
-          └── no tool calls ──► END
-                                  │
-                    ┌─────────────▼──────────────┐
-                    │  evaluate → revise loop     │
-                    │  (up to MAX_REVISIONS)      │
-                    └─────────────┬──────────────┘
-                                  ▼
-                             yield result + PDF
-```
+- The text is exported to a `.pdf` file.
+- The `.png` file is encoded to Base64.
+- All files are organized into a clean folder: `Posts/<Topic_Name>/`.
+- The CLI/MCP returns the post text, the relative file paths, and the Base64 image payload.
 
 ---
 
@@ -229,15 +138,15 @@ MAX_SEARCHES=2
 MAX_REVISIONS=1
 ```
 
-**OpenAI (swap example):**
+**OpenAI (Gemini/GPT Example):**
 ```env
 LLM_PROVIDER=openai
-LLM_API_KEY=sk-...
-LLM_MODEL=gpt-4o
+LLM_API_KEY=your-api-key
+LLM_MODEL=gemini-2.5-flash
 LLM_MAX_TOKENS=4096
 LLM_TEMPERATURE=1
 LLM_TOP_P=0.95
-LLM_BASE_URL=        # leave blank for OpenAI; set URL for Gemini/Groq/Together
+LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
 
 SERPAPI_API_KEY=...
 
@@ -245,15 +154,13 @@ MAX_SEARCHES=2
 MAX_REVISIONS=1
 ```
 
-**Why `MAX_SEARCHES` and `MAX_REVISIONS` are in `.env`:**
+### 3. Local Image Generation Setup (Draw Things)
 
-> **Cost control** — each search and revision is an LLM call. Tuning them per environment (dev vs prod) without touching code keeps the cost knob in one place.
->
-> **Progress bar accuracy** — percentage milestones are calculated from these two values at startup. Change them in `.env` and the progress bar recalibrates automatically; no code change, no redeployment.
-
-Get keys from:
-- NVIDIA NIM: https://build.nvidia.com
-- SerpAPI: https://serpapi.com
+To enable the image generation step, you must configure your local machine to run Flux via Draw Things:
+1. Ensure the **Draw Things** application is installed on your Mac.
+2. Install the `draw-things-cli` command-line utility and ensure it is available in your terminal's `$PATH`.
+3. Inside Draw Things, ensure you have downloaded the required model: `flux_2_klein_4b_q6p.ckpt`.
+4. The pipeline will automatically invoke the CLI during the final generation phase.
 
 ---
 
@@ -262,108 +169,18 @@ Get keys from:
 ### CLI
 
 ```bash
-# Interactive
-python main.py
-
-# Argument
+# Run via CLI
 python main.py "FastAPI vs Flask for Python APIs"
-python main.py "PostgreSQL indexing strategies"
-python main.py "GitHub Actions CI/CD pipelines"
 ```
-
-**Example terminal output:**
-```
-  [  0%]  Reasoning and planning searches...
-  [ 58%]  Search cap (2) reached — writing with gathered data...
-  [ 63%]  Writing the post...
-  [ 73%]  Evaluating post (attempt 1/1)...
-  [ 99%]  Evaluator approved — post is ready.
-
-============================================================
-YOUR LINKEDIN POST
-============================================================
-📉 Our Go services used to ship 650–900 MB Docker images...
-============================================================
-Character count: 560
-Generated in:    51.6s
-
-Post saved to: Posts/Docker_multi-stage_builds.pdf
-```
-
----
 
 ### MCP Server
 
 **Start:**
 ```bash
-python mcp_server.py              # default port 8000
-python mcp_server.py --port 9000
+python mcp_server.py
 ```
 
 **Connect via MCP Inspector:**
 1. Transport Type → `Streamable HTTP`
 2. URL → `http://localhost:8000/mcp`
 3. Connect → Tools → `create_linkedin_post` → enter topic → Run Tool
-
-**Register with Claude Code:**
-```bash
-claude mcp add linkedin-post-creator \
-  --env LLM_API_KEY="nvapi-..." \
-  --env SERPAPI_API_KEY="..." \
-  -- python "path/to/mcp_server.py"
-```
-
-**Register with Claude Desktop:**
-```bash
-mcp install mcp_server.py --name "linkedin-post-creator" --env-file .env
-```
-
----
-
-## Configuration
-
-All values live in `.env`. No code changes needed when switching providers.
-
-| Variable | Default | Description |
-|---|---|---|
-| `LLM_PROVIDER` | `openai` | `nvidia` → `ChatNVIDIA`; `openai` → `ChatOpenAI` |
-| `LLM_API_KEY` | *(required)* | API key for your LLM provider |
-| `LLM_MODEL` | *(required)* | Model ID, e.g. `qwen/qwen3-next-80b-a3b-instruct` or `gpt-4o` |
-| `LLM_MAX_TOKENS` | `4096` | Max output tokens per LLM call |
-| `LLM_TEMPERATURE` | `1` | Sampling temperature |
-| `LLM_TOP_P` | `1` | Top-p sampling |
-| `LLM_BASE_URL` | *(empty = OpenAI)* | Base URL for OpenAI-compatible endpoints (Gemini, Groq, etc.) |
-| `LLM_ENABLE_THINKING` | `false` | NVIDIA nemotron thinking mode (openai provider only) |
-| `LLM_REASONING_BUDGET` | `16384` | Nemotron thinking token budget |
-| `LLM_EXTRA_BODY_JSON` | *(unset)* | Raw JSON merged into every request body (e.g. disable Gemini 2.5 thinking) |
-| `MAX_SEARCHES` | `3` | Max Google searches per run; also scales the progress bar |
-| `MAX_REVISIONS` | `2` | Max evaluator-driven rewrites; also scales the progress bar |
-| `SERPAPI_API_KEY` | *(required)* | SerpAPI key for Google Search |
-| `--port` | `8000` | MCP server port (CLI flag) |
-| `--host` | `localhost` | MCP server host (CLI flag) |
-
----
-
-## Post Format
-
-```
-[emoji] [hook — the problem, raw and specific]
-
-[what tool/technique was used and how]
-
-[the hard result — real metric from search]
-
-[one specific developer question]
-
-#hashtag1 #hashtag2 #hashtag3
-```
-
-**Example:**
-```
-📉 Our Go services used to ship 650–900MB Docker images because we built and ran in the same stage.
-We switched to multi-stage builds: compile with golang:alpine, copy only the binary to scratch.
-The largest service went from 847MB to 28MB — confirmed in a 2022 Docker case study.
-Push time dropped from 42s to 14s on our CI runner.
-What's your multi-stage build copying into the final stage that you could leave out?
-#Docker #GoLang #DevOps #Containerization #BuildOptimization
-```

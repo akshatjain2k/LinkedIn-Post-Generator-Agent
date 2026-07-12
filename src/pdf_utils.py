@@ -21,10 +21,11 @@ def save_post_as_pdf(post: str, topic: str, output_dir: str | None = None) -> st
     Uses reportlab — no system fonts needed, works on Windows/Mac/Linux.
     Returns the absolute path of the saved file.
     """
-    base = output_dir or os.path.join(os.path.dirname(os.path.dirname(__file__)), "Posts")
+    safe_topic = topic_to_filename(topic)
+    base = output_dir or os.path.join(os.path.dirname(os.path.dirname(__file__)), "Posts", safe_topic)
     os.makedirs(base, exist_ok=True)
 
-    filepath = os.path.join(base, f"{topic_to_filename(topic)}.pdf")
+    filepath = os.path.join(base, f"{safe_topic}.pdf")
 
     doc = SimpleDocTemplate(
         filepath,
