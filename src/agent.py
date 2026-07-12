@@ -252,6 +252,10 @@ def _build_llm():
             "reasoning_budget": reasoning_budget,
         }
 
+    reasoning_effort = os.getenv("LLM_REASONING_EFFORT")
+    if reasoning_effort:
+        llm_kwargs["model_kwargs"] = {"reasoning_effort": reasoning_effort}
+
     return ChatOpenAI(**llm_kwargs)  # type: ignore[call-arg]
 
 
@@ -303,17 +307,29 @@ def _make_tools_node(tools):
     return run_tools
 
 
-def _force_write_node(state: AgentState) -> dict:  # noqa: ARG001
+def _force_write_node(state: AgentState) -> dict:
     """
     Force-write node: injected when the search cap is hit.
-    Adds a HumanMessage telling the LLM to write the post immediately
-    instead of trying to search again.
+    Adds ToolMessages to resolve any dangling tool calls (required by strict APIs),
+    then adds a HumanMessage telling the LLM to write the post immediately.
     """
-    return {"messages": [HumanMessage(content=(
+    last_message = state["messages"][-1]
+    tool_calls = getattr(last_message, "tool_calls", [])
+    
+    new_messages = []
+    for tc in tool_calls:
+        new_messages.append(ToolMessage(
+            tool_call_id=tc["id"],
+            name=tc["name"],
+            content="Search cap reached. Tool execution denied."
+        ))
+        
+    new_messages.append(HumanMessage(content=(
         "You've done enough research. "
         "Stop searching and write the LinkedIn post now using the information "
         "you've already gathered. Follow the system prompt format exactly."
-    ))]}
+    )))
+    return {"messages": new_messages}
 
 
  # Routing
