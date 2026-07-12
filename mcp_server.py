@@ -83,11 +83,11 @@ def create_linkedin_post(topic: str) -> str:
 if __name__ == "__main__":
     print(f"\n LinkedIn Post Creator MCP Server")
     print(f" ─────────────────────────────────────────────────")
-    print(f" Listening on : http://{_args.host}:{_args.port}/mcp")
+    print(f" Listening on : http://{_args.host}:{_args.port}/sse")
     print(f"")
     print(f" In MCP Inspector set:")
-    print(f"   Transport Type → Streamable HTTP")
-    print(f"   URL            → http://{_args.host}:{_args.port}/mcp")
+    print(f"   Transport Type → SSE")
+    print(f"   URL            → http://{_args.host}:{_args.port}/sse")
     print(f" ─────────────────────────────────────────────────\n")
 
-    mcp.run(transport="streamable-http")
+    mcp.run(transport="sse")

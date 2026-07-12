@@ -206,6 +206,8 @@ def _build_llm():
     max_tokens  = int(os.getenv("LLM_MAX_TOKENS",    "4096"))
     provider    = os.getenv("LLM_PROVIDER", "openai").lower()
 
+    seed = int(os.getenv("LLM_SEED", "42"))
+    
     # ── ChatNVIDIA path ───────────────────────────────────────────────────────
     if provider == "nvidia":
         return ChatNVIDIA(
@@ -214,6 +216,7 @@ def _build_llm():
             temperature=temperature,
             top_p=top_p,
             max_tokens=max_tokens,
+            seed=seed,
             timeout=120,
         )
 
