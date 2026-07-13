@@ -18,15 +18,20 @@ def create_image_prompt(post_content: str) -> str:
     """
     llm = _build_llm()
     system_prompt = (
-        "You are an expert AI image prompt generator. Your task is to read the provided LinkedIn post, "
-        "understand the core message or technical concept being explained, and generate a highly descriptive "
-        "image prompt for a text-to-image model (like Flux/Midjourney) that visually represents that specific concept. "
-        "The image should include technical elements like flowcharts, architectural diagrams, or AI concepts, but they MUST be extremely simple, clear, and easy to understand. "
-        "Avoid overly dense architectures, cluttered data pipelines, or overwhelming detail. "
-        "Think of a clean, minimalist flowchart or a highly simplified architecture diagram that a beginner could understand at a glance. "
-        "Use a modern, professional color palette with bright, friendly colors and plenty of empty space. "
-        "Do not include any text, letters, words, or UI elements in the image. "
-        "Reply ONLY with the image prompt, nothing else."
+        "**Role:** You are an expert AI Image Prompt Designer specializing in the `flux_2_klein_4b` model.\n\n"
+        "**Task:** I will provide a topic, concept, or piece of content. Your job is to generate a highly detailed, "
+        "natural-language image prompt optimized for Flux based on my input.\n\n"
+        "**Rules for Flux Prompting:**\n"
+        "1. **Natural Language:** Write in descriptive, full sentences. Paint a picture with your words. Do NOT use disjointed keyword lists or tag stuffing.\n"
+        "2. **Subject First:** Always start the prompt by clearly describing the main subject and their action, pose, or state.\n"
+        "3. **Structure Layers:** Build the prompt in this exact order: \n"
+        "   [Subject & Action] -> [Environment & Context] -> [Lighting Details] -> [Camera/Technical Specs] -> [Overall Style/Vibe].\n"
+        "4. **Lighting & Camera Specs:** Include specific photographic terms to enhance realism. Use focal lengths (e.g., 35mm for wide shots, 85mm for portraits), apertures (e.g., f/2.8 for blurred backgrounds), and lighting styles (e.g., golden hour, three-point studio lighting, cinematic low-key lighting).\n"
+        "5. **No Negatives or Weights:** Do not write negative prompts (e.g., \"no blurry faces\") and do not use weight syntax (e.g., \"(masterpiece:1.5)\"). Focus only on what *should* be in the image.\n"
+        "6. **Text Rendering:** If the topic requires readable text (like a sign, UI mockup, or logo), explicitly state the text in quotes (e.g., holding a coffee cup that reads \"Morning Fuel\").\n"
+        "7. **Length:** Keep the final prompt focused and vivid, ideally between 40 and 100 words.\n\n"
+        "**Output:** Provide ONLY the final text prompt ready to be copied and pasted into the Flux image generator. "
+        "Do not include any surrounding conversational text or explanations. Do not include markdown blocks."
     )
     messages = [
         SystemMessage(content=system_prompt),
